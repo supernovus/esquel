@@ -1,0 +1,21 @@
+OOSQL
+-------
+
+This is a Perl 6 Role, which allows you to build classes which represent
+tables in an SQL database. It provides several methods that abstract out
+the SQL syntax, so instead of doing:
+
+  my $result = $db.sql("SELECT name,job FROM mytable WHERE id = $id;");
+  if ($result) {
+    my @rows = $result.rows();
+  }
+
+You can do:
+
+  my @rows = $mytable.where(:$id).select(:name,:job);
+
+NOTE: This is completely unfinished and still in early development stage.
+      Don't try to use this, it doesn't actually work yet.
+
+Author: Timothy Totten
+License: Artistic License 2.0
