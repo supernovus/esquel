@@ -1,0 +1,53 @@
+OOSQL Notes
+-----------------
+
+Taken from when this was WW::Model::Table, ignore some of the details.
+
+An extended Database Model role that will let you do something like:
+
+  class Models::MyTable does WW::Model::Table {
+    has $!table = 'mytable';
+    has %!fields = { :id(:auto), :name(:required), :job };
+    method change-name ($id, $name) { 
+      self.where(:$id).update(:$name); ## yes, where always comes first.
+    }
+  }
+
+Then in your Controller:
+
+  self.load-model('MyTable').connect($db_connect_params);
+  self.mytable.change-name(14, 'Bob'); ## change id 14's name to 'Bob';
+  @results = self.mytable.where(:id(:gt(15))).limit(10).select(:name);
+  for @results -> $result {
+    $.data<users><name> = $result<name>;
+  }
+
+Modifiers such as where(), limit(), order-by(), group-by() and having()
+MUST come BEFORE select(), update(), and delete() statements.
+In fact, update() and delete() will refuse to run by unless a where() 
+modifier has been set (use where(*) if you really want to update or delete 
+everything.)
+
+Modifiers that don't apply to the statement will be ignored (so for
+insert statements, ALL modifiers will be ignored.)
+
+More examples:
+
+  $employees.group-by('department').having(:MAX(:salary(:lt(50000))))
+    .select('department',:MAX(:salary(:as('highest')));
+  
+  Becomes:
+
+  SELECT department, MAX(salary) AS 'highest'
+  FROM employees
+  GROUP BY department
+  HAVING MAX(salary) < 50000;
+
+IMPLEMENTATION NOTES: 
+
+Convert Seq into Hash via:
+
+  for %!fields.kv -> $key, $value is rw {
+    if $value ~~ Seq { %!fields{$key} = %($value) }
+  }
+
