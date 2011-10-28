@@ -1,0 +1,7 @@
+{
+  "name"        : "Esquel",
+  "version"     : "*",
+  "description" : "SQL Statements and Queries, made easy.",
+  "depends"     : [ ],
+  "source-url"  : "git://github.com/supernovus/esquel.git"
+}
