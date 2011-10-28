@@ -9,14 +9,23 @@ has $!bind    is rw; ## If set, we use prepared statements with bound params.
 
 ## Stuff below here will be cleared by clear(:all) or by auto-clear.
 has $!where   is rw; ## The WHERE clause for "select", "update", "delete".
-has @!bound   is rw; ## Used by where is bind is true.
 has $!limit   is rw; ## Limit to this many results.
 has $!orderby is rw; ## Order by...
 has $!groupby is rw; ## Group by...
 has $!having  is rw; ## Similar to WHERE but used with aggregate functions.
 
+## The bound array is used for various portions of replacements.
+## It has three nested arrays:
+##  [0] Direct statements, such as update, insert, etc.
+##  [1] Where clauses.
+##  [2] Having clauses.
+## The values are put in the proper order and flattened for the @bind
+## output.
+has @!bound = [],[],[];
+
+
 ## Set the database table.
-## We offer from(), into() and on() as alternatives.
+## We offer from(), into() and in() as alternatives.
 ## You can also set it in your constructor, using new(:table($name));
 method from ($table) {
   $!table = $table;
@@ -26,7 +35,7 @@ method into ($table) {
   $!table = $table;
   return self;
 }
-method on ($table) {
+method in ($table) {
   $!table = $table;
   return self;
 }
@@ -61,55 +70,55 @@ method nobind {
 ##     ((type = "admin") AND (job LIKE "manage"))
 ##
 ## TODO <low priority>  Add optional explicit AND/OR modifiers.
-method !query ($type, *@rules) {
+method !query ($type, $bind, *@rules) {
   if @rules.elems == 1  && @rules[0] ~~ Whatever {
-    return @rules[0];
+    return True; ## Skip the where statement.
   }
   elsif @rules.elems == 1 && @rules[0] ~~ Str {
     return $type ~ ' ' ~ @rules[0];
   }
   else {
-    return $type ~ ' ' ~ self!parse-query(@rules);
+    return $type ~ ' ' ~ self!parse-query(@rules, $bind);
   }
 }
 
 ## WHERE clause
 multi method where (*%rules) {
   my $rules = %rules;
-  $!where = self!query('WHERE', $rules);
+  $!where = self!query('WHERE', 1, $rules);
   return self;
 }
 multi method where (*@rules) {
-  $!where = self!query('WHERE', |@rules);
+  $!where = self!query('WHERE', 1, |@rules);
   return self;
 }
 
 ## HAVING clause
 multi method having (*%rules) {
   my $rules = %rules;
-  $!having = self!query('HAVING', $rules);
+  $!having = self!query('HAVING', 2, $rules);
   return self;
 }
 multi method having (*@rules) {
-  $!having = self!query('HAVING', |@rules);
+  $!having = self!query('HAVING', 2, |@rules);
   return self;
 }
 
 ## parse-query: private method to parse where and having clauses.
-method !parse-query (@rules) {
+method !parse-query (@rules, $bind) {
   my $where;
   for @rules -> $rule {
     #$*ERR.say: "Doing rule: "~$rule.perl;
     if $rule !~~ Hash { next; } ## Skip non-hashes.
     if ! defined $where { $where = '('; }
     else { $where ~= ' OR ('; }
-    $where ~= self!parse-query-hash($rule) ~ ')';
+    $where ~= self!parse-query-hash($rule, $bind) ~ ')';
   }
   return $where;
 }
 
 ## Called by parse-query for each Hash found.
-method !parse-query-hash(%hash) {
+method !parse-query-hash(%hash, $bind) {
   my $where;
   for %hash.kv -> $key, $val {
     if ! defined $where { $where = '('; }
@@ -119,12 +128,12 @@ method !parse-query-hash(%hash) {
       for @($val) -> $subval {
         if ! defined $subwhere { $subwhere = '('; }
         else { $subwhere ~= ' OR ('; }
-        $subwhere ~= self!parse-query-statement($key, $subval) ~ ')';
+        $subwhere ~= self!parse-query-statement($key, $subval, $bind) ~ ')';
       }
       $where ~= $subwhere ~ ')';
     }
     else {
-      $where ~= self!parse-query-statement($key, $val) ~ ')';
+      $where ~= self!parse-query-statement($key, $val, $bind) ~ ')';
     }
   }
   return $where;
@@ -136,7 +145,7 @@ method !parse-query-hash(%hash) {
 ## value having special characters, use binding and let the
 ## DBI handler escape your strings for you.
 ## This now handles SQL function calls, and LITERAL text too.
-method !get-value ($value) {
+method !get-value ($value, $bind=0) {
   my $val;
   if $value ~~ Pair {
     my $func   = $value.key;
@@ -147,10 +156,10 @@ method !get-value ($value) {
      if $subval ~~ Array {
        my @vals = @($subval);
        $val = @vals.shift;
-       @!bound.push: @vals;
+       @!bound[$bind].push: @vals;
      }
     }
-    ## If the ke is unknown, it's an SQL function.
+    ## If the key is unknown, it's an SQL function.
     else {
       if $subval ~~ Array {
         my @vals = @($subval);
@@ -172,7 +181,7 @@ method !get-value ($value) {
   }
   else {
     if $!bind {
-      @!bound.push: $value;
+      @!bound[$bind].push: $value;
       return '?';
     }
     elsif $value !~~ Numeric {
@@ -184,7 +193,7 @@ method !get-value ($value) {
 
 ## Parse a WHERE or HAVING statement, adding in any
 ## aggregate methods and alternative comparisons.
-method !parse-query-statement ($key, $val) {
+method !parse-query-statement ($key, $val, $bind) {
   my $comp = '=';
   my $item = $key;
   my $want = $val;
@@ -211,7 +220,7 @@ method !parse-query-statement ($key, $val) {
     }
   }
 
-  my $wantval = self!get-value($want);
+  my $wantval = self!get-value($want, $bind);
   my $statement = "$item $comp $wantval";
   return $statement;
 }
@@ -228,7 +237,12 @@ method clear (:$keep, :$all, :$check, *%mods) {
     'having'  => sub { undefine($!having);  },
     'orderby' => sub { undefine($!orderby); },
     'groupby' => sub { undefine($!groupby); },
-    'bound'   => sub { @!bound = ();        }, ## splice when it works again.
+    'bound'   => sub {
+      ## This could use splice, but it's not working.
+      for 0..@!bound.end -> $c {
+        @!bound[$c] = ();
+      }
+    }, 
   };
   for %clear-rules.kv -> $which, &clearit {
     if ( $all || ($keep && !%mods{$which}) || (!$keep && %mods{$which})) {
@@ -241,7 +255,12 @@ method clear (:$keep, :$all, :$check, *%mods) {
 ## and any bound paramters, depending on the $!bind settings.
 ## It also runs the auto-clear function, if $!keep isn't set.
 method !statement ($stmt) {
-  my @bound = @!bound; ## Save prior to clearing.
+  my @bound; 
+  for 0..@!bound.end -> $c {
+    if @!bound[$c].elems > 0 {
+      @bound.push: @!bound[$c]; ## Get a flat representation.
+    }
+  }
   self.clear(:check, :all);
   if $!bind {
     return $stmt, @bound;
@@ -263,7 +282,7 @@ method !sanity (:$where) {
 
 ## Add WHERE statements where needed.
 method !parse-where ($stmt is rw) {
-  if $!where { #&& $!where !~~ Whatever {
+  if $!where && $!where !~~ Bool {
     $stmt ~= " $!where";
   }
 }
@@ -321,14 +340,22 @@ method insert (*%values) {
   self!sanity;
   my $stmt = "INSERT INTO $!table (";
   my $comma = False;
-  for %values.keys -> $field {
+  ## Sorting the keys and values into arrays.
+  ## There's probably a faster, better way to do this,
+  ## but for now, this will work.
+  my (@keys, @vals);
+  for %values.kv -> $k, $v {
+    @keys.push: $k;
+    @vals.push: $v;
+  }
+  for @keys -> $field {
     if $comma { $stmt ~= ', '; }
     else      { $comma = True; }
     $stmt ~= $field;
   }
   $stmt ~= ') VALUES (';
   $comma = False;
-  for %values.value -> $value {
+  for @vals -> $value {
     if $comma { $stmt ~= ', '; }
     else      { $comma = True; }
     my $val = self!get-value($value);
@@ -344,7 +371,7 @@ method delete {
   my $stmt = "DELETE FROM $!table";
   self!parse-where($stmt);
   $stmt ~= ';';
-  return $stmt;
+  return self!statement($stmt);
 }
 
 ## CREATE TABLE statement.
@@ -360,6 +387,7 @@ method create-table ($name, @columns) {
     else      { $comma = True; }
     if $column ~~ Pair {
       my $name = $column.key;
+      $stmt ~= $name;
       my $hasval  = $column.value;
       my $val; ## This will be set depending on the value format.
       if $hasval ~~ Hash {
@@ -369,7 +397,7 @@ method create-table ($name, @columns) {
             $val ~= " $k";
           }
           else {
-            $val ~= " $k($v)";
+            $val ~= " $k"~"($v)";
           }
         }
       }
@@ -383,7 +411,7 @@ method create-table ($name, @columns) {
               $val ~= " $k";
             }
             else {
-              $val ~= " $k($v)";
+              $val ~= " $k"~"($v)";
             }
           }
           else {
@@ -392,7 +420,7 @@ method create-table ($name, @columns) {
         }
       }
       else {
-        $val = $hasval;
+        $val = " $hasval";
       }
       $stmt ~= $val;
     }
@@ -400,6 +428,7 @@ method create-table ($name, @columns) {
       $stmt ~= $column;
     }
   }
+  $stmt ~= ");";
   return $stmt;
 }
 

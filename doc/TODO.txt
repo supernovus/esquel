@@ -1,0 +1,6 @@
+* Esquel: <low priority>  Add optional explicit AND/OR modifiers.
+* Esquel: aggregate methods, AS statements, etc.
+* Esquel: GROUP BY and ORDER BY
+* Esquel: HAVING
+* Esquel/DBI: Implement Esquel::DBI
+* Tests: <persistent> More test coverage.
