@@ -1,26 +1,9 @@
 OOSQL Notes
 -----------------
 
-Taken from when this was WW::Model::Table, ignore some of the details.
-
-An extended Database Model role that will let you do something like:
-
-  class Models::MyTable does WW::Model::Table {
-    has $!table = 'mytable';
-    has %!fields = { :id(:auto), :name(:required), :job };
-    method change-name ($id, $name) { 
-      self.where(:$id).update(:$name); ## yes, where always comes first.
-    }
-  }
-
-Then in your Controller:
-
-  self.load-model('MyTable').connect($db_connect_params);
-  self.mytable.change-name(14, 'Bob'); ## change id 14's name to 'Bob';
-  @results = self.mytable.where(:id(:gt(15))).limit(10).select(:name);
-  for @results -> $result {
-    $.data<users><name> = $result<name>;
-  }
+Taken from when this was WW::Model::Table. I've pulled out the obsolete
+stuff, and made a new document outlining a future project that will use
+Esquel::DBI to implement two Roles making a full Database ORM possible.
 
 Modifiers such as where(), limit(), order-by(), group-by() and having()
 MUST come BEFORE select(), update(), and delete() statements.

@@ -1,21 +1,38 @@
-OOSQL
+Esquel -- An Object-Oriented SQL Library for Perl 6
 -------
 
-This is a Perl 6 Role, which allows you to build classes which represent
-tables in an SQL database. It provides several methods that abstract out
-the SQL syntax, so instead of doing:
+NOTE: This is a work in progress, and doesn't currently work at all.
+      When it's done, I'll be moving onto Oharem, which is referred to
+      a few times in here, but hasn't even been started yet.
+      Oh, and until Rakudo "nom" is fixed, and MiniDBI is ported to it,
+      the Esquel::DBI library will only work on the "ng" branch of Rakudo.
 
-  my $result = $db.sql("SELECT name,job FROM mytable WHERE id = $id;");
-  if ($result) {
-    my @rows = $result.rows();
-  }
+A simple way to generate SQL statements using native Perl 6 calls.
+Inspired by SQL::Abstract from Perl 5.
 
-You can do:
+For example (using the MiniDBI interface):
 
-  my @rows = $mytable.where(:$id).select(:name,:job);
+  my $sql = Esquel.new;
+  my ($stmt, @bind) = $sql.bind.from($table).where(:$id).select('name', 'job');
+  ## SELECT name, job FROM $table WHERE id = $id;
+  my $sth = $dbh.prepare($stmt);
+  $sth.execute(|@bind);
+  my $result = $sth.fetchrow_hashref;
+  say "{$result<name>} is a {$result<job>}";
 
-NOTE: This is completely unfinished and still in early development stage.
-      Don't try to use this, it doesn't actually work yet.
+For an even simpler interface (but assuming a DBI-compatible library)
+you can use the Esquel::DBI wrapper, which turns the above into:
+
+  ## Pass it the DBH object returned from a connect() call.
+  my $db = Esquel::DBI.new($dbh);
+  ## This assumes 'bind' by default, to override, use 'nobind'.
+  my $result = $db.where(:$id).select('name', 'job').row;
+  say "{$result<name>} is a {$result<job>}";
+
+TODO: After getting Esquel::DBI up and running, I intend to use it as the
+      foundation for a new library called Oharem. For details on that, see
+      the doc/oharem.txt file.
 
 Author: Timothy Totten
 License: Artistic License 2.0
+
