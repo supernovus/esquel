@@ -16,24 +16,39 @@ has $!groupby is rw; ## Group by...
 has $!having  is rw; ## Similar to WHERE but used with aggregate functions.
 
 ## Set the database table.
+## We offer from(), into() and on() as alternatives.
+## You can also set it in your constructor, using new(:table($name));
 method from ($table) {
   $!table = $table;
+  return self;
+}
+method into ($table) {
+  $!table = $table;
+  return self;
+}
+method on ($table) {
+  $!table = $table;
+  return self;
 }
 
 ## Change the auto-clear settings.
 method keep {
   $!keep = True;
+  return self;
 }
 method nokeep {
   $!keep = False;
+  return self;
 }
 
 ## Change the bind settings.
 method bind {
   $!bind = True;
+  return self;
 }
 method nobind {
   $!bind = False;
+  return self;
 }
 
 ## When using positional parameters, it's either a single string
@@ -47,17 +62,21 @@ method nobind {
 ##
 ## TODO <low priority>  Add optional explicit AND/OR modifiers.
 method !query ($type, *@rules) {
-  if @rules.elems == 1 && @rules[0] ~~ Str {
+  if @rules.elems == 1  && @rules[0] ~~ Whatever {
     return @rules[0];
   }
+  elsif @rules.elems == 1 && @rules[0] ~~ Str {
+    return $type ~ ' ' ~ @rules[0];
+  }
   else {
-    return $type ~ ' ' ~ self!parse-query(|@rules);
+    return $type ~ ' ' ~ self!parse-query(@rules);
   }
 }
 
 ## WHERE clause
 multi method where (*%rules) {
-  $!where = self!query('WHERE', %rules);
+  my $rules = %rules;
+  $!where = self!query('WHERE', $rules);
   return self;
 }
 multi method where (*@rules) {
@@ -67,7 +86,8 @@ multi method where (*@rules) {
 
 ## HAVING clause
 multi method having (*%rules) {
-  $!having = self!query('HAVING', %rules);
+  my $rules = %rules;
+  $!having = self!query('HAVING', $rules);
   return self;
 }
 multi method having (*@rules) {
@@ -76,9 +96,10 @@ multi method having (*@rules) {
 }
 
 ## parse-query: private method to parse where and having clauses.
-method !parse-query (*@rules) {
+method !parse-query (@rules) {
   my $where;
   for @rules -> $rule {
+    #$*ERR.say: "Doing rule: "~$rule.perl;
     if $rule !~~ Hash { next; } ## Skip non-hashes.
     if ! defined $where { $where = '('; }
     else { $where ~= ' OR ('; }
@@ -87,6 +108,7 @@ method !parse-query (*@rules) {
   return $where;
 }
 
+## Called by parse-query for each Hash found.
 method !parse-query-hash(%hash) {
   my $where;
   for %hash.kv -> $key, $val {
@@ -99,7 +121,7 @@ method !parse-query-hash(%hash) {
         else { $subwhere ~= ' OR ('; }
         $subwhere ~= self!parse-query-statement($key, $subval) ~ ')';
       }
-      $where ~= $subwhere;
+      $where ~= $subwhere ~ ')';
     }
     else {
       $where ~= self!parse-query-statement($key, $val) ~ ')';
@@ -108,10 +130,65 @@ method !parse-query-hash(%hash) {
   return $where;
 }
 
+## Process values, adding bindings if $!bind is true, and
+## wrapping non-numeric values into single quotes otherwise.
+## NOTE: We do NO escaping, so if you are worried about your
+## value having special characters, use binding and let the
+## DBI handler escape your strings for you.
+## This now handles SQL function calls, and LITERAL text too.
+method !get-value ($value) {
+  my $val;
+  if $value ~~ Pair {
+    my $func   = $value.key;
+    my $subval = $value.value;
+    ## We support a literal text syntax, inspired by SQL::Abstract.
+    if $func eq 'LITERAL' {
+     $val = $subval;
+     if $subval ~~ Array {
+       my @vals = @($subval);
+       $val = @vals.shift;
+       @!bound.push: @vals;
+     }
+    }
+    ## If the ke is unknown, it's an SQL function.
+    else {
+      if $subval ~~ Array {
+        my @vals = @($subval);
+        $subval = '';
+        my $comma = False;
+        for @vals -> $rawparam {
+          if $comma { $subval ~= ','; }
+          else      { $comma = True;  }
+          my $param = self!get-value($rawparam);
+          $subval ~= $param;
+        }
+      }
+      else {
+        $subval = self!get-value($subval);
+      }
+      $val = $func~"($subval)";
+    }
+    return $val;
+  }
+  else {
+    if $!bind {
+      @!bound.push: $value;
+      return '?';
+    }
+    elsif $value !~~ Numeric {
+      return "'$value'";
+    }
+  }
+  return $value;
+}
+
+## Parse a WHERE or HAVING statement, adding in any
+## aggregate methods and alternative comparisons.
 method !parse-query-statement ($key, $val) {
   my $comp = '=';
-  my ($item, $want) = self!parse-aggregate-key($key, $val);
-  if $want ~~ Pair {
+  my $item = $key;
+  my $want = $val;
+  while $want ~~ Pair {
     my $subkey = $want.key;
     $want = $want.value;
     given $subkey {
@@ -121,10 +198,11 @@ method !parse-query-statement ($key, $val) {
       when 'gte'  { $comp = '>=';   }
       when 'lte'  { $comp = '<=';   }
       when 'not'  { $comp = '!=';   }
+      default     { $item = $subkey~"($item)"; }
     }
   }
-  elsif ($val ~~ Bool) {
-    if $val {
+  if $want ~~ Bool {
+    if $want {
       $want = 0;
       $comp = '!=';
     }
@@ -133,31 +211,9 @@ method !parse-query-statement ($key, $val) {
     }
   }
 
-  if ($want !~~ Numeric) {
-    $want = "'$want'";
-  }
-
-  if $!bind {
-    @!bound.push: $want;
-    $want = '?';
-  }
-
-  my $statement = "$key $comp $want";
+  my $wantval = self!get-value($want);
+  my $statement = "$item $comp $wantval";
   return $statement;
-}
-
-method !parse-aggregate-key($key is copy, $def) {
-  my $item = $key;
-  my $what = $def;
-  if $def ~~ Pair {
-    given $key {
-      when 'MAX'   { $what = $def.value; $item = "MAX({$def.key})";   }
-      when 'MIN'   { $what = $def.value; $item = "MIN({$def.key})";   }
-      when 'SUM'   { $what = $def.value; $item = "SUM({$def.key})";   }
-      when 'COUNT' { $what = $def.value; $item = "COUNT({$def.key})"; }
-    }
-  }
-  return ($item, $what);
 }
 
 ## Clear specific query modifiers.
@@ -174,22 +230,54 @@ method clear (:$keep, :$all, :$check, *%mods) {
     'groupby' => sub { undefine($!groupby); },
     'bound'   => sub { @!bound = ();        }, ## splice when it works again.
   };
-  for %clear-rules.kv -> $rule, &clearit {
+  for %clear-rules.kv -> $which, &clearit {
     if ( $all || ($keep && !%mods{$which}) || (!$keep && %mods{$which})) {
       clearit();
     }
   }
 }
 
-## Represents a select query.
+## A method to return either the statement, or a statement
+## and any bound paramters, depending on the $!bind settings.
+## It also runs the auto-clear function, if $!keep isn't set.
+method !statement ($stmt) {
+  my @bound = @!bound; ## Save prior to clearing.
+  self.clear(:check, :all);
+  if $!bind {
+    return $stmt, @bound;
+  }
+  return $stmt;
+}
+
+## Ensures that the $!table has been set.
+## If :where is passed, it also ensures $!where has been set.
+## If either clause fails, the script will die.
+method !sanity (:$where) {
+  if ! $!table {
+    die "No table has been set.";
+  }
+  if $where && ! $!where {
+    die "No where statement on a required field.";
+  }
+}
+
+## Add WHERE statements where needed.
+method !parse-where ($stmt is rw) {
+  if $!where { #&& $!where !~~ Whatever {
+    $stmt ~= " $!where";
+  }
+}
+
+## SELECT query
 method select (*%fields, *@fields) {
+  self!sanity;
   if %fields {
     @fields.push: %fields.pairs;
   }
 
-  my $select = 'SELECT ';
+  my $stmt = 'SELECT ';
   if @fields.elems == 0 || @fields[0] ~~ Whatever || @fields[0] eq '*' {
-    $select ~= '*';
+    $stmt ~= '*';
   }
   else {
     my $comma = False;
@@ -199,23 +287,119 @@ method select (*%fields, *@fields) {
         $name = $field.key;
         ## TODO: aggregate methods, AS statements, etc.
       }
-      if $comma { $select ~= ','; }
+      if $comma { $stmt ~= ','; }
       else      { $comma = True;  }
-      $select ~= "$name";
+      $stmt ~= "$name";
     }
   }
-  $select ~= " FROM $!table";
-  if $!where {
-    $select ~= " $!where";
-  }
+  $stmt ~= " FROM $!table";
+  self!parse-where($stmt);
   ## TODO: GROUP BY and ORDER BY
   ## TODO: HAVING
-  my $return = [ $select, @!bound ];
-  my @bound = @!bound; ## Save prior to clearing.
-  self.clear(:check, :all);
-  if $!bind {
-    return $select, @bound;
+  $stmt ~= ';';
+  return self!statement($stmt);
+}
+
+## UPDATE statement
+method update (*%newvalues) {
+  self!sanity(:where);
+  my $stmt = "UPDATE $!table SET ";
+  my $comma = False;
+  for %newvalues.kv -> $field, $value {
+    if $comma { $stmt ~= ', '; }
+    else      { $comma = True;   }
+    my $val = self!get-value($value);
+    $stmt ~= "$field=$val";
   }
-  return $select;
+  self!parse-where($stmt);
+  $stmt ~= ';';
+  return self!statement($stmt);
+}
+
+## INSERT statement
+method insert (*%values) {
+  self!sanity;
+  my $stmt = "INSERT INTO $!table (";
+  my $comma = False;
+  for %values.keys -> $field {
+    if $comma { $stmt ~= ', '; }
+    else      { $comma = True; }
+    $stmt ~= $field;
+  }
+  $stmt ~= ') VALUES (';
+  $comma = False;
+  for %values.value -> $value {
+    if $comma { $stmt ~= ', '; }
+    else      { $comma = True; }
+    my $val = self!get-value($value);
+    $stmt ~= $val;
+  }
+  $stmt ~= ');';
+  return self!statement($stmt);
+}
+
+## DELETE statement, as easy as it gets.
+method delete {
+  self!sanity(:where);
+  my $stmt = "DELETE FROM $!table";
+  self!parse-where($stmt);
+  $stmt ~= ';';
+  return $stmt;
+}
+
+## CREATE TABLE statement.
+## It doesn't use a slurpy array, but a normal one.
+## You can pass strings, which will be used as is, or
+## pairs, which can use a nicer Perl 6 syntax.
+## Don't pass the commas, they'll be added automatically.
+method create-table ($name, @columns) {
+  my $stmt = "CREATE TABLE $name (";
+  my $comma = False;
+  for @columns -> $column {
+    if $comma { $stmt ~= ', '; }
+    else      { $comma = True; }
+    if $column ~~ Pair {
+      my $name = $column.key;
+      my $hasval  = $column.value;
+      my $val; ## This will be set depending on the value format.
+      if $hasval ~~ Hash {
+        $val = '';
+        for $hasval.kv -> $k,$v {
+          if $v ~~ Bool && $v {
+            $val ~= " $k";
+          }
+          else {
+            $val ~= " $k($v)";
+          }
+        }
+      }
+      elsif $hasval ~~ Array {
+        $val = '';
+        for @($hasval) -> $subval {
+          if $subval ~~ Pair {
+            my $k = $subval.key;
+            my $v = $subval.value;
+            if $v ~~ Bool && $v {
+              $val ~= " $k";
+            }
+            else {
+              $val ~= " $k($v)";
+            }
+          }
+          else {
+            $val ~= " $subval";
+          }
+        }
+      }
+      else {
+        $val = $hasval;
+      }
+      $stmt ~= $val;
+    }
+    else {
+      $stmt ~= $column;
+    }
+  }
+  return $stmt;
 }
 

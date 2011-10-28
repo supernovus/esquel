@@ -1,9 +1,9 @@
 Esquel -- An Object-Oriented SQL Library for Perl 6
 -------
 
-NOTE: This is a work in progress, and doesn't currently work at all.
-      When it's done, I'll be moving onto Oharem, which is referred to
-      a few times in here, but hasn't even been started yet.
+NOTE: This is a work in progress, not everything is completed or tested yet.
+      The Esquel::DBI module hasn't even been started.
+      When it's done, I'll be moving onto Oharem (see doc/oharem.txt)
       Oh, and until Rakudo "nom" is fixed, and MiniDBI is ported to it,
       the Esquel::DBI library will only work on the "ng" branch of Rakudo.
 
@@ -28,10 +28,6 @@ you can use the Esquel::DBI wrapper, which turns the above into:
   ## This assumes 'bind' by default, to override, use 'nobind'.
   my $result = $db.where(:$id).select('name', 'job').row;
   say "{$result<name>} is a {$result<job>}";
-
-TODO: After getting Esquel::DBI up and running, I intend to use it as the
-      foundation for a new library called Oharem. For details on that, see
-      the doc/oharem.txt file.
 
 Author: Timothy Totten
 License: Artistic License 2.0
