@@ -25,7 +25,6 @@ you can use the Esquel::DBI wrapper, which turns the above into:
 
   ## Pass it the DBH object returned from a connect() call.
   my $db = Esquel::DBI.new($dbh);
-  ## This assumes 'bind' by default, to override, use 'nobind'.
   my $result = $db.where(:$id).select('name', 'job').row;
   say "{$result<name>} is a {$result<job>}";
 

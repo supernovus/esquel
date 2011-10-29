@@ -1,4 +1,5 @@
 ## Esquel: Turn Perl 6 method calls and data structures into SQL queries.
+### TODO: Once we are ready to support "nom" only, use constants.
 
 class Esquel;
 
@@ -22,7 +23,6 @@ has $!having  is rw; ## Similar to WHERE but used with aggregate functions.
 ## The values are put in the proper order and flattened for the @bind
 ## output.
 has @!bound = [],[],[];
-
 
 ## Set the database table.
 ## We offer from(), into() and in() as alternatives.
@@ -78,28 +78,29 @@ method !query ($type, $bind, *@rules) {
     return $type ~ ' ' ~ @rules[0];
   }
   else {
+    if $!bind {
+      @!bound[$bind] = (); ## Clear existing entry.
+    }
     return $type ~ ' ' ~ self!parse-query(@rules, $bind);
   }
 }
 
 ## WHERE clause
-multi method where (*%rules) {
-  my $rules = %rules;
-  $!where = self!query('WHERE', 1, $rules);
-  return self;
-}
-multi method where (*@rules) {
+method where (*%rules, *@rules) {
+  if %rules {
+    my $rules = %rules;
+    @rules.push: $rules;
+  }
   $!where = self!query('WHERE', 1, |@rules);
   return self;
 }
 
 ## HAVING clause
-multi method having (*%rules) {
-  my $rules = %rules;
-  $!having = self!query('HAVING', 2, $rules);
-  return self;
-}
-multi method having (*@rules) {
+method having (*%rules, *@rules) {
+  if %rules {
+    my $rules = %rules;
+    @rules.push: $rules;
+  }
   $!having = self!query('HAVING', 2, |@rules);
   return self;
 }
@@ -230,19 +231,14 @@ method !parse-query-statement ($key, $val, $bind) {
 ## Keep usage: $this.clear(:keep, :where); # clears everything but where.
 ## All usage: $this.clear(:all); # clears everything, no exceptions.
 method clear (:$keep, :$all, :$check, *%mods) {
+  @!bound[0] = (); ## Always clear statement bindings.
   if $check && $!keep { return; } ## Skip if auto-clear is turned off.
   my %clear-rules = {
-    'where'   => sub { undefine($!where);   },
+    'where'   => sub { undefine($!where);  @!bound[1] = (); },
+    'having'  => sub { undefine($!having); @!bound[2] = (); },
     'limit'   => sub { undefine($!limit);   },
-    'having'  => sub { undefine($!having);  },
     'orderby' => sub { undefine($!orderby); },
     'groupby' => sub { undefine($!groupby); },
-    'bound'   => sub {
-      ## This could use splice, but it's not working.
-      for 0..@!bound.end -> $c {
-        @!bound[$c] = ();
-      }
-    }, 
   };
   for %clear-rules.kv -> $which, &clearit {
     if ( $all || ($keep && !%mods{$which}) || (!$keep && %mods{$which})) {
@@ -286,6 +282,8 @@ method !parse-where ($stmt is rw) {
     $stmt ~= " $!where";
   }
 }
+
+#### Primary statements
 
 ## SELECT query
 method select (*%fields, *@fields) {
@@ -374,13 +372,25 @@ method delete {
   return self!statement($stmt);
 }
 
+#### Secondary statements.
+
+## DROP TABLE [IF EXISTS] statement.
+method drop-table ($name, :$exists) {
+  my $stmt = "DROP TABLE ";
+  if $exists { $stmt ~= "IF EXISTS "; }
+  $stmt ~= "$name;";
+}
+
 ## CREATE TABLE statement.
 ## It doesn't use a slurpy array, but a normal one.
 ## You can pass strings, which will be used as is, or
 ## pairs, which can use a nicer Perl 6 syntax.
 ## Don't pass the commas, they'll be added automatically.
-method create-table ($name, @columns) {
-  my $stmt = "CREATE TABLE $name (";
+method create-table ($name, @columns, :$drop) {
+  my $stmt;
+  if $drop { $stmt = self.drop-table($name, :exists) ~ ' '; }
+  else     { $stmt = ''; }
+  $stmt ~= "CREATE TABLE $name (";
   my $comma = False;
   for @columns -> $column {
     if $comma { $stmt ~= ', '; }
@@ -418,6 +428,11 @@ method create-table ($name, @columns) {
             $val ~= " $subval";
           }
         }
+      }
+      elsif $hasval ~~ Pair {
+        my $k = $hasval.key;
+        my $v = $hasval.value;
+        $val = " $k"~"($v)";
       }
       else {
         $val = " $hasval";
